@@ -353,3 +353,84 @@ class DocProjDataset(Dataset):
             sample = self.transform(sample)
 
         return sample
+
+
+class DIWDataset(Dataset):
+    def __init__(self, root_dir, split, transform=None):
+        self.root_dir = Path(root_dir)
+        self.split = split
+        filenames = (self.root_dir / f"{split}.txt").read_text().strip().split()
+        self.image_name_list = [str(self.root_dir / "img" / name) for name in filenames]
+        self.label_name_list = [str(self.root_dir / "seg" / name) for name in filenames]
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_name_list)
+
+    def __getitem__(self, idx):
+
+        image = io.imread(self.image_name_list[idx])
+        imname = self.image_name_list[idx]
+        imidx = np.array([idx])
+
+        if (0 == len(self.label_name_list)):
+            label_3 = np.zeros(image.shape)
+        else:
+            label_3 = io.imread(self.label_name_list[idx])
+
+        label = np.zeros(label_3.shape[0:2])
+        if (3 == len(label_3.shape)):
+            label = label_3[:, :, 0]
+        elif (2 == len(label_3.shape)):
+            label = label_3
+
+        if (3 == len(image.shape) and 2 == len(label.shape)):
+            label = label[:, :, np.newaxis]
+        elif (2 == len(image.shape) and 2 == len(label.shape)):
+            image = image[:, :, np.newaxis]
+            label = label[:, :, np.newaxis]
+        sample = {'imidx': imidx, 'image': image, 'label': label}
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        return sample
+
+
+class Doc3DDataset(Dataset):
+    def __init__(self, root_dir, split, transform=None):
+        self.root_dir = Path(root_dir)
+        self.split = split
+        filenames = (self.root_dir / f"{split}.txt").read_text().strip().split()
+        self.image_name_list = [str(self.root_dir / "img" / name) for name in filenames]
+        self.label_name_list = [str((self.root_dir / "uv" / name).with_suffix(".exr")) for name in filenames]
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_name_list)
+
+    def __getitem__(self, idx):
+
+        image = io.imread(self.image_name_list[idx])
+        imname = self.image_name_list[idx]
+        imidx = np.array([idx])
+
+        label_3 = io.imread(self.label_name_list[idx])
+
+        label = np.zeros(label_3.shape[0:2])
+        if (3 == len(label_3.shape)):
+            label = label_3[:, :, 0]
+        elif (2 == len(label_3.shape)):
+            label = label_3
+
+        if (3 == len(image.shape) and 2 == len(label.shape)):
+            label = label[:, :, np.newaxis]
+        elif (2 == len(image.shape) and 2 == len(label.shape)):
+            image = image[:, :, np.newaxis]
+            label = label[:, :, np.newaxis]
+        sample = {'imidx': imidx, 'image': image[..., :3], 'label': (label != 0.0).astype(int) * 255}
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        return sample

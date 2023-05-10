@@ -3,23 +3,25 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 import torch.optim as optim
 import lightning as L
 from lightning_fabric.loggers import TensorBoardLogger
 
-from data_loader import DocProjDataset, RescaleT, RandomCrop, ToTensorLab
+from data_loader import DocProjDataset, RescaleT, RandomCrop, ToTensorLab, DIWDataset, Doc3DDataset
 
 from model import U2NET, U2NETP
 from u2net_test import normPRED
 
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision('medium')
 precision = 16
 num_gpus = 4
 
-dataset_root = "/home/ro38seb/datasets/documents/DocProj/"
+docproj_root = "/mnt/hdd/datasets/documents/DocProjTiny"
+diwproj_root = "/mnt/hdd/datasets/documents/diw"
+doc3d_root = "/mnt/hdd/datasets/documents/Doc3D"
 
 # ------- 1. define loss function --------
 
@@ -36,10 +38,10 @@ def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
     loss6 = bce_loss(d6, labels_v)
 
     loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5 + loss6
-#    print("l0: %3f, l1: %3f, l2: %3f, l3: %3f, l4: %3f, l5: %3f, l6: %3f\n" % (
-#        loss0.data.item(), loss1.data.item(), loss2.data.item(), loss3.data.item(), loss4.data.item(),
-#        loss5.data.item(),
-#        loss6.data.item()))
+    #    print("l0: %3f, l1: %3f, l2: %3f, l3: %3f, l4: %3f, l5: %3f, l6: %3f\n" % (
+    #        loss0.data.item(), loss1.data.item(), loss2.data.item(), loss3.data.item(), loss4.data.item(),
+    #        loss5.data.item(),
+    #        loss6.data.item()))
 
     return loss0, loss
 
@@ -47,30 +49,23 @@ def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
 # ------- 2. set the directory of training dataset --------
 model_name = 'u2netp'  # 'u2net'
 
-image_ext = '.jpg'
-label_ext = '.png'
-
 model_dir = Path('saved_models') / f"{model_name}_{precision}"
 model_dir.mkdir(exist_ok=True, parents=True)
 
 epoch_num = 100000
 batch_size_train = 12 * num_gpus
 batch_size_val = 4
-print("load train")
-train_dataset = DocProjDataset(
-    root_dir=dataset_root,
-    split="train",
-    transform=transforms.Compose([
-        RescaleT(320),
-        RandomCrop(288),
-        ToTensorLab(flag=0)]))
-print("load val")
-val_dataset = DocProjDataset(
-    root_dir=dataset_root,
-    split="val",
-    transform=transforms.Compose([
-        RescaleT(288),
-        ToTensorLab(flag=0)]))
+
+train_transforms = transforms.Compose([RescaleT(320), RandomCrop(288), ToTensorLab(flag=0)])
+val_transforms = transforms.Compose([RescaleT(288), ToTensorLab(flag=0)])
+train_dataset = ConcatDataset([DocProjDataset(root_dir=docproj_root, split="train", transform=train_transforms),
+                               DIWDataset(root_dir=diwproj_root, split="train", transform=train_transforms),
+                               Doc3DDataset(root_dir=doc3d_root, split="train", transform=train_transforms),
+                               ])
+val_dataset = ConcatDataset([DocProjDataset(root_dir=docproj_root, split="val", transform=val_transforms),
+                             DIWDataset(root_dir=diwproj_root, split="val", transform=val_transforms),
+                             Doc3DDataset(root_dir=doc3d_root, split="val", transform=val_transforms),
+                             ])
 
 print("---")
 print("train images: ", len(train_dataset))
@@ -79,7 +74,7 @@ print("---")
 
 train_num = len(train_dataset)
 
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, num_workers=4)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, num_workers=0)
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=False, num_workers=4)
 
 # ------- 3. define model --------
@@ -89,7 +84,8 @@ if (model_name == 'u2net'):
 elif (model_name == 'u2netp'):
     net = U2NETP(3, 1)
 
-fabric = L.Fabric(accelerator="cuda", devices=num_gpus, strategy="ddp", precision=precision, loggers=TensorBoardLogger(""))
+fabric = L.Fabric(accelerator="cuda", devices=num_gpus, strategy="ddp", precision=precision,
+                  loggers=TensorBoardLogger(""))
 fabric.launch()
 tb_logger: SummaryWriter = fabric.logger.experiment
 # ------- 4. define optimizer --------
@@ -114,6 +110,9 @@ for epoch in range(0, epoch_num):
         ite_num4val += 1
 
         inputs, labels = data['image'].float(), data['label'].float()
+        if i == 0 and fabric.global_rank == 0:
+            tb_logger.add_images("train/images", inputs, global_step=epoch)
+            tb_logger.add_images("train/masks", labels, global_step=epoch)
 
         # y zero the parameter gradients
         optimizer.zero_grad()
@@ -161,12 +160,12 @@ for epoch in range(0, epoch_num):
             d0, d1, d2, d3, d4, d5, d6 = net(inputs)
             loss2, loss = muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels)
 
-        if i == 0 and fabric.global_rank==0:
+        if i == 0 and fabric.global_rank == 0:
             pred = d1[:, 0, :, :]
             pred_norm = normPRED(pred)
-#            tb_logger.add_image("val/image", inputs[0], global_step=epoch)
-#            tb_logger.add_image("val/pred", pred[0][None], global_step=epoch)
-#            tb_logger.add_image("val/mask", labels[0], global_step=epoch)
+            #            tb_logger.add_image("val/image", inputs[0], global_step=epoch)
+            #            tb_logger.add_image("val/pred", pred[0][None], global_step=epoch)
+            #            tb_logger.add_image("val/mask", labels[0], global_step=epoch)
 
             tb_logger.add_images("val/images", inputs, global_step=epoch)
             tb_logger.add_images("val/preds_norm", pred_norm.unsqueeze(1), global_step=epoch)
@@ -180,5 +179,5 @@ for epoch in range(0, epoch_num):
     fabric.log_dict({"val/loss": val_losses / len(val_dataloader),
                      "val/loss_tar": val_losses_tar / len(val_dataloader),
                      }, step=epoch)
-    torch.save(net.state_dict(),  model_dir / f"{model_name}_bce_itr_{epoch}_val_{val_losses / len(val_dataloader):.3f}_tar_{val_losses_tar / len(val_dataloader):.3f}.pth")
-    
+    torch.save(net.state_dict(),
+               model_dir / f"{model_name}_bce_itr_{epoch}_val_{val_losses / len(val_dataloader):.3f}_tar_{val_losses_tar / len(val_dataloader):.3f}.pth")

@@ -2,8 +2,8 @@ from sklearn.model_selection import train_test_split
 
 from pathlib import Path
 
-dataset_root = Path("/mnt/hdd/datasets/documents/DocProjTiny")
-images = Path(dataset_root / "all.txt").read_text().split("\n")
+dataset_root = Path("/mnt/hdd/datasets/documents/Doc3D")
+images = Path(dataset_root / "all.txt").read_text().split()
 
 print(images)
 
