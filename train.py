@@ -50,7 +50,7 @@ def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
 class WrapperModel(pl.LightningModule):
     def __init__(self, model_name: str):
         super().__init__()
-
+        self.example_input_array = torch.rand([1, 3, 288, 288])
         if model_name == 'u2net':
             self.model = U2NET(3, 1)
         elif model_name == 'u2netp':
@@ -58,6 +58,10 @@ class WrapperModel(pl.LightningModule):
 
     def on_fit_start(self):
         self.tb_log = self.logger.experiment
+
+    def forward(self, x):
+        d0, d1, d2, d3, d4, d5, d6 = self.model(x)
+        return normPRED(d1)
 
     def training_step(self, batch, batch_idx):
 
